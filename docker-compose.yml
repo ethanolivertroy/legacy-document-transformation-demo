@@ -1,0 +1,74 @@
+# Docker Compose for running all three conversion tools
+#
+# Usage:
+#   docker-compose up           # Run all converters
+#   docker-compose up pandoc    # Run only Pandoc
+#   docker-compose up markitdown docling  # Run specific tools
+#
+# After conversion, run extraction:
+#   docker-compose run extract
+#
+
+services:
+  # Pandoc converter
+  pandoc:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.pandoc
+    volumes:
+      - ./docs/sample:/workspace/docs:ro
+      - ./output/pandoc:/workspace/output
+    command: ["/workspace/docs", "/workspace/output/markdown"]
+
+  # Microsoft MarkItDown converter
+  markitdown:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.markitdown
+    volumes:
+      - ./docs/sample:/workspace/docs:ro
+      - ./output/markitdown:/workspace/output
+    command: ["/workspace/docs", "/workspace/output/markdown"]
+
+  # IBM Docling converter
+  docling:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.docling
+    volumes:
+      - ./docs/sample:/workspace/docs:ro
+      - ./output/docling:/workspace/output
+    command: ["/workspace/docs", "/workspace/output/markdown"]
+
+  # Extraction service (runs after conversion)
+  extract:
+    image: python:3.11-slim
+    volumes:
+      - ./output:/workspace/output
+      - ./scripts/extract:/workspace/scripts:ro
+    working_dir: /workspace
+    command: >
+      bash -c "
+        pip install -q python-docx &&
+        python scripts/extract-controls.py output/ output/extracted/controls.json &&
+        python scripts/extract-metadata.py output/ output/extracted/metadata.json &&
+        python scripts/extract-entities.py output/ output/extracted/entities.json
+      "
+    depends_on:
+      - pandoc
+      - markitdown
+      - docling
+
+  # Full pipeline (converts and extracts)
+  full-pipeline:
+    image: python:3.11-slim
+    volumes:
+      - ./docs/sample:/workspace/docs:ro
+      - ./output:/workspace/output
+      - ./scripts:/workspace/scripts:ro
+    working_dir: /workspace
+    command: >
+      bash -c "
+        echo 'Note: For full pipeline, run converters first with docker-compose up pandoc markitdown docling' &&
+        echo 'Then run: docker-compose run extract'
+      "

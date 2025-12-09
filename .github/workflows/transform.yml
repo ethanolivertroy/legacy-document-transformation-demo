@@ -1,0 +1,192 @@
+name: Transform Legacy Documents
+
+on:
+  push:
+    paths:
+      - 'docs/**'
+      - 'scripts/**'
+      - '.github/workflows/transform.yml'
+  pull_request:
+    paths:
+      - 'docs/**'
+  workflow_dispatch:
+    inputs:
+      document_path:
+        description: 'Path to document(s) to transform'
+        required: false
+        default: 'docs/sample'
+
+env:
+  INPUT_DIR: ${{ github.event.inputs.document_path || 'docs/sample' }}
+
+jobs:
+  # Job 1: Run all three conversion tools in parallel using matrix strategy
+  convert:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false  # Continue even if one tool fails
+      matrix:
+        tool: [pandoc, markitdown, docling]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Create output directories
+        run: |
+          mkdir -p output/${{ matrix.tool }}/markdown
+          mkdir -p output/${{ matrix.tool }}/json
+
+      # Pandoc conversion
+      - name: Install Pandoc
+        if: matrix.tool == 'pandoc'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pandoc
+
+      - name: Run Pandoc conversion
+        if: matrix.tool == 'pandoc'
+        run: |
+          chmod +x scripts/convert/run-pandoc.sh
+          ./scripts/convert/run-pandoc.sh "$INPUT_DIR" "output/pandoc/markdown"
+
+      # MarkItDown conversion
+      - name: Setup Python for MarkItDown
+        if: matrix.tool == 'markitdown'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install MarkItDown
+        if: matrix.tool == 'markitdown'
+        run: pip install 'markitdown[all]'
+
+      - name: Run MarkItDown conversion
+        if: matrix.tool == 'markitdown'
+        run: python scripts/convert/run-markitdown.py "$INPUT_DIR" "output/markitdown/markdown"
+
+      # Docling conversion
+      - name: Free disk space for Docling
+        if: matrix.tool == 'docling'
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/share/boost
+          df -h
+
+      - name: Setup Python for Docling
+        if: matrix.tool == 'docling'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Docling
+        if: matrix.tool == 'docling'
+        run: pip install docling
+
+      - name: Run Docling conversion
+        if: matrix.tool == 'docling'
+        run: python scripts/convert/run-docling.py "$INPUT_DIR" "output/docling/markdown"
+
+      # Upload artifacts
+      - name: Upload conversion artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: output-${{ matrix.tool }}
+          path: output/${{ matrix.tool }}/
+          retention-days: 30
+
+  # Job 2: Extract structured data and generate comparison reports
+  extract-and-compare:
+    needs: convert
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all conversion artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: output/
+          pattern: output-*
+          merge-multiple: false
+
+      - name: Reorganize artifacts
+        run: |
+          # Move downloaded artifacts to expected structure
+          mkdir -p output/pandoc output/markitdown output/docling output/extracted
+          mv output/output-pandoc/* output/pandoc/ 2>/dev/null || true
+          mv output/output-markitdown/* output/markitdown/ 2>/dev/null || true
+          mv output/output-docling/* output/docling/ 2>/dev/null || true
+          rm -rf output/output-*
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install extraction dependencies
+        run: pip install -r requirements.txt || pip install python-docx
+
+      - name: Extract controls from markdown
+        run: python scripts/extract/extract-controls.py output/ output/extracted/controls.json
+
+      - name: Extract metadata
+        run: python scripts/extract/extract-metadata.py output/ output/extracted/metadata.json
+
+      - name: Extract entities
+        run: python scripts/extract/extract-entities.py output/ output/extracted/entities.json
+
+      - name: Generate comparison report
+        run: |
+          echo "# Document Transformation Comparison Report" > output/comparison-report.md
+          echo "" >> output/comparison-report.md
+          echo "Generated: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> output/comparison-report.md
+          echo "" >> output/comparison-report.md
+
+          echo "## Conversion Summary" >> output/comparison-report.md
+          echo "" >> output/comparison-report.md
+
+          for tool in pandoc markitdown docling; do
+            if [ -d "output/$tool/markdown" ]; then
+              count=$(ls -1 output/$tool/markdown/*.md 2>/dev/null | wc -l || echo "0")
+              echo "- **$tool**: $count files converted" >> output/comparison-report.md
+            fi
+          done
+
+          echo "" >> output/comparison-report.md
+          echo "## Extracted Data Summary" >> output/comparison-report.md
+          echo "" >> output/comparison-report.md
+
+          if [ -f "output/extracted/controls.json" ]; then
+            controls=$(python3 -c "import json; d=json.load(open('output/extracted/controls.json')); print(d.get('summary', {}).get('total_references', 0))" 2>/dev/null || echo "0")
+            echo "- Control references found: $controls" >> output/comparison-report.md
+          fi
+
+          echo "" >> output/comparison-report.md
+          echo "See artifacts for full details." >> output/comparison-report.md
+
+      - name: Upload final artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: transformation-results
+          path: |
+            output/pandoc/
+            output/markitdown/
+            output/docling/
+            output/extracted/
+            output/comparison-report.md
+          retention-days: 90
+
+      - name: Write job summary
+        run: |
+          echo "## Transformation Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          cat output/comparison-report.md >> $GITHUB_STEP_SUMMARY
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Control Extraction Preview" >> $GITHUB_STEP_SUMMARY
+          echo '```json' >> $GITHUB_STEP_SUMMARY
+          head -50 output/extracted/controls.json >> $GITHUB_STEP_SUMMARY || echo "{}" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY

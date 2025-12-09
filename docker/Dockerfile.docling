@@ -1,0 +1,27 @@
+# Dockerfile for IBM Docling document conversion
+FROM python:3.11-slim
+
+LABEL maintainer="legacy-document-transformation-demo"
+LABEL description="IBM Docling converter for legacy compliance documents"
+
+# Install system dependencies required by Docling
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    poppler-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Docling
+RUN pip install --no-cache-dir docling
+
+WORKDIR /workspace
+
+# Copy conversion script
+COPY scripts/convert/run-docling.py /usr/local/bin/run-docling.py
+RUN chmod +x /usr/local/bin/run-docling.py
+
+ENTRYPOINT ["python", "/usr/local/bin/run-docling.py"]
+CMD ["/workspace/docs", "/workspace/output"]

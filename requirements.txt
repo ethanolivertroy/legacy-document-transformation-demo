@@ -1,0 +1,9 @@
+# Document conversion tools
+markitdown[all]>=0.0.1
+docling>=2.0.0
+
+# Extraction and analysis
+python-docx>=1.1.0
+
+# Utilities
+pathlib2>=2.3.0;python_version<"3.4"

@@ -1,0 +1,14 @@
+# Dockerfile for Pandoc document conversion
+FROM pandoc/core:3.5
+
+LABEL maintainer="legacy-document-transformation-demo"
+LABEL description="Pandoc document converter for legacy compliance documents"
+
+WORKDIR /workspace
+
+# Copy conversion script
+COPY scripts/convert/run-pandoc.sh /usr/local/bin/run-pandoc.sh
+RUN chmod +x /usr/local/bin/run-pandoc.sh
+
+ENTRYPOINT ["/usr/local/bin/run-pandoc.sh"]
+CMD ["/workspace/docs", "/workspace/output"]
